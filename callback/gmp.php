@@ -1,16 +1,28 @@
 <?php
 
+use WHMCS\Module\Gateway;
+use WHMCS\Terminus;
+
+/** @type WHMCS\Application $whmcs */
+
 # Required File Includes
-include("../../../dbconnect.php");
-include("../../../includes/functions.php");
-include("../../../includes/gatewayfunctions.php");
-include("../../../includes/invoicefunctions.php");
+include "../../../init.php";
+include ROOTDIR . DIRECTORY_SEPARATOR . 'includes/functions.php';
+include ROOTDIR . DIRECTORY_SEPARATOR . 'includes/gatewayfunctions.php';
+include ROOTDIR . DIRECTORY_SEPARATOR . 'includes/invoicefunctions.php';
 include("../gmp/mercadopago.php");
 
-$gatewaymodule = "gmp"; # Enter your gateway module name here replacing template
+$gatewayModule = 'gmp'; # Enter your gateway module name here replacing template
 
-$GATEWAY = getGatewayVariables($gatewaymodule);
-if (!$GATEWAY["type"]) die("Module Not Activated"); # Checks gateway module is active before accepting callback
+/**
+ * Ensure that the module is active before attempting to run any code
+ */
+$gateway = new Gateway();
+if (!$gateway->isActiveGateway($gatewayModule) || !$gateway->load($gatewayModule)) {
+    Terminus::getInstance()->doDie('Module not Active');
+}
+
+$GATEWAY = $gateway->getParams();
 
 $mp = new MP($GATEWAY['client_id'], $GATEWAY['client_secret']);
 if ($GATEWAY['testmode']) {
@@ -22,8 +34,8 @@ $status = "0";
 if ($payment_info["status"] == 200) {
   $data = $payment_info["response"]["collection"];
   if (!$data["sandbox"] && "approved"==$data["status"]) {
-    $transid = $data["id"];
-    $invoiceid = $data["external_reference"];
+    $transactionId = $data["id"];
+    $invoiceId = $data["external_reference"];
     $amount = (float)$data["transaction_amount"];
     $fee = (float)$data["transaction_amount"]-(float)$data["net_received_amount"];
     $status = "1";
@@ -31,14 +43,45 @@ if ($payment_info["status"] == 200) {
 }
 
 if ($status=="1") {
-  # Successful
-  $invoiceid = checkCbInvoiceID($invoiceid,$gatewaymodule); # Checks invoice ID is a valid invoice number or ends processing
-  checkCbTransID($transid); # Checks transaction number isn't already in the database and ends processing if it does
-  addInvoicePayment($invoiceid,$transid,$amount,$fee,$gatewaymodule); # Apply Payment to Invoice: invoiceid, transactionid, amount paid, fees, modulename
-	logTransaction($GATEWAY["name"],$debug,"Successful"); # Save to Gateway Log: name, data array, status
+    /**
+     * Check the invoice id is valid or die
+     */
+    $invoiceId = checkCbInvoiceID($invoiceId, $GATEWAY["name"]);
+
+    /**
+     * Check transaction Id is unique or die
+     */
+    checkCbTransID($transactionId);
+
+    /**
+     * Successful payment.
+     * Apply Payment to Invoice: invoiceId, transactionId, amount paid, fees, moduleName
+     */
+    addInvoicePayment(
+        $invoiceId,
+        $transactionId,
+        $amount,
+        $fee,
+        $gatewayModule
+    );
+    /**
+     * Save log entry to the Gateway Log. Name, data (as array) and status
+     */
+    logTransaction(
+        $GATEWAY["name"],
+        $debug,
+        "Successful"
+    );
 } else {
-	# Unsuccessful
-  logTransaction($GATEWAY["name"],$debug,"Unsuccessful"); # Save to Gateway Log: name, data array, status
+    /**
+     * Unsuccessful payment.
+     * Save log entry to the Gateway Log. Name, data (as array) and status
+     */
+    logTransaction(
+        $GATEWAY["name"],
+        $debug,
+        "Unsuccessful"
+    );
 }
 
 ?>
